@@ -1,0 +1,127 @@
+#!/usr/bin/env node
+
+/**
+* Durandal Init
+*/
+
+const program = require('commander')
+const chalk = require('chalk')
+const inquirer = require('inquirer')
+const ora = require('ora')
+const fs = require('fs')
+const path = require('path')
+const Metalsmith = require('metalsmith')
+const async = require('async')
+const prompt = require('cli-prompt')
+const render = require('consolidate').handlebars.render
+const download = require('download-git-repo')
+const userHome = require('user-home')
+
+program
+  .usage('[project-name]')
+
+program.on('--help', () => {
+  console.log()
+  console.log('  Examples:')
+  console.log()
+  console.log(chalk.gray('    # Create a new Durandal project'))
+  console.log('    $ durandal init my-project')
+  console.log()
+})
+
+program.parse(process.argv)
+
+const rawName = program.args[0]
+const inPlace = !rawName || rawName === '.'
+const projectName = inPlace ? path.relative('../', process.cwd()) : rawName
+const projectPath = path.resolve(rawName || '.')
+const isExists = fs.existsSync(projectPath)
+
+if (isExists) {
+  inquirer.prompt([{
+    type: 'confirm',
+    message: inPlace ? `Generate project in current directory ${chalk.gray(projectPath)} ?` : `Target directory exists. Continue ${chalk.gray(projectPath)} ?`,
+    name: 'ok'
+  }]).then(answers => {
+    if (answers.ok) {
+      startInit()
+    }
+  }).catch(console.error)
+} else {
+  startInit()
+}
+
+function downloadTemplate() {
+  const cachePath = path.resolve(userHome, '.durandal_temp')
+  const spinner = ora('Template downloading start ...').start()
+  return new Promise((res, rej) => {
+    download('quancheng-ec/Durandal-Project-Template', cachePath, err => {
+      if (err) {
+        spinner.fail('Template downloading failed')
+        rej(err)
+      }
+      spinner.succeed('Template downloaded successfully')
+      res(cachePath)
+    })
+  })
+}
+
+function ask(files, metalsmith, done) {
+  const prompts = ['name', 'description']
+
+  const questions = [{
+    type: 'input',
+    message: 'Your project name',
+    default: projectName,
+    name: 'name'
+  }, {
+    type: 'input',
+    message: 'Your project description',
+    default: 'A Durandal App',
+    name: 'description'
+  }]
+
+  const metadata = metalsmith.metadata()
+
+  inquirer.prompt(questions).then(answers => {
+    questions.forEach(({ name }) => {
+      metadata[name] = answers[name]
+    })
+    done()
+  })
+}
+
+function template(files, metalsmith, done) {
+  const keys = Object.keys(files)
+  const metadata = metalsmith.metadata()
+
+  async.each(keys, run, done)
+
+  function run(file, done) {
+    const str = files[file].contents.toString()
+    render(str, metadata, (err, res) => {
+      if (err) return done(err)
+      files[file].contents = new Buffer(res)
+      done()
+    });
+  }
+}
+
+function generateFromTemplate(templatePath) {
+  return Metalsmith(__dirname)
+    .source(templatePath)
+    .destination(projectPath)
+    .use(ask)
+    .use(template)
+    .build(err => {
+      if (err) throw err
+    })
+}
+
+function startInit() {
+  downloadTemplate()
+    .then(generateFromTemplate)
+    .catch(err => {
+      throw err
+    })
+}
